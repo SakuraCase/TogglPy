@@ -49,6 +49,7 @@ class Toggl():
     #-------------------------------------------------------------
 
     def decodeJSON(self, jsonString):
+        jsonString = str(jsonString, 'utf-8')
         return json.JSONDecoder().decode(jsonString)
 
     #-------------------------------------------------------------
@@ -98,6 +99,7 @@ class Toggl():
             return urllib.request.urlopen(urllib.request.Request(endpoint, headers=self.headers)).read()
         else:
             data = json.JSONEncoder().encode(parameters)
+            data = data.encode('ascii')
             return urllib.request.urlopen(urllib.request.Request(endpoint, data=data, headers=self.headers)).read() # make request and read the response
 
     #----------------------------------
