@@ -4,11 +4,24 @@
 #--------------------------------------------------------------
 from datetime import datetime
 # for making requests
-import urllib.request, urllib.error, urllib.parse
-import urllib.request, urllib.parse, urllib.error
+# backward compatibility with python2
+import sys
+
+cafile = None
+if sys.version[0] == "2":
+    from urllib import urlencode
+    from urllib2 import urlopen, Request
+else:
+    from urllib.parse import urlencode
+    from urllib.request import urlopen, Request
+    try:
+        import certifi
+        cafile = certifi.where()
+    except ImportError:
+        pass
+
 
 from base64 import b64encode
-
 # parsing json data
 import json
 #
@@ -19,6 +32,7 @@ class Endpoints():
     WORKSPACES = "https://www.toggl.com/api/v8/workspaces"
     CLIENTS = "https://www.toggl.com/api/v8/clients"
     PROJECTS = "https://www.toggl.com/api/v8/projects"
+    TASKS = "https://www.toggl.com/api/v8/tasks"
     REPORT_WEEKLY = "https://toggl.com/reports/api/v2/weekly"
     REPORT_DETAILED = "https://toggl.com/reports/api/v2/details"
     REPORT_SUMMARY = "https://toggl.com/reports/api/v2/summary"
@@ -28,6 +42,8 @@ class Endpoints():
     def STOP_TIME(pid):
         return "https://www.toggl.com/api/v8/time_entries/" + str(pid) + "/stop"
     CURRENT_RUNNING_TIME = "https://www.toggl.com/api/v8/time_entries/current"
+
+
 
 #-------------------------------------------------------
 # Class containing the necessities for Toggl interaction
@@ -49,7 +65,6 @@ class Toggl():
     #-------------------------------------------------------------
 
     def decodeJSON(self, jsonString):
-        jsonString = str(jsonString, 'utf-8')
         return json.JSONDecoder().decode(jsonString)
 
     #-------------------------------------------------------------
@@ -82,12 +97,12 @@ class Toggl():
     def requestRaw(self, endpoint, parameters=None):
         '''make a request to the toggle api at a certain endpoint and return the RAW page data (usually JSON)'''
         if parameters == None:
-            return urllib.request.urlopen(urllib.request.Request(endpoint, headers=self.headers)).read()
+            return urlopen(Request(endpoint, headers=self.headers), cafile=cafile).read()
         else:
             if 'user_agent' not in parameters:
                 parameters.update( {'user_agent' : self.user_agent,} ) # add our class-level user agent in there
-            endpoint = endpoint + "?" + urllib.parse.urlencode(parameters) # encode all of our data for a get request & modify the URL
-            return urllib.request.urlopen(urllib.request.Request(endpoint, headers=self.headers)).read() # make request and read the response
+            endpoint = endpoint + "?" + urlencode(parameters) # encode all of our data for a get request & modify the URL
+            return urlopen(Request(endpoint, headers=self.headers), cafile=cafile).read() # make request and read the response
 
     def request(self, endpoint, parameters=None):
         '''make a request to the toggle api at a certain endpoint and return the page data as a parsed JSON dict'''
@@ -96,11 +111,11 @@ class Toggl():
     def postRequest(self, endpoint, parameters=None):
         '''make a POST request to the toggle api at a certain endpoint and return the RAW page data (usually JSON)'''
         if parameters == None:
-            return urllib.request.urlopen(urllib.request.Request(endpoint, headers=self.headers)).read()
+            return urlopen(Request(endpoint, headers=self.headers), cafile=cafile).read().decode('utf-8')
         else:
             data = json.JSONEncoder().encode(parameters)
-            data = data.encode('ascii')
-            return urllib.request.urlopen(urllib.request.Request(endpoint, data=data, headers=self.headers)).read() # make request and read the response
+            data = data.encode('utf-8')
+            return urlopen(Request(endpoint, data=data, headers=self.headers), cafile=cafile).read().decode('utf-8') # make request and read the response
 
     #----------------------------------
     # Methods for managing Time Entries
@@ -128,13 +143,15 @@ class Toggl():
         response = self.postRequest(Endpoints.STOP_TIME(entryid))
         return self.decodeJSON(response)
 
-    def createTimeEntry(self, hourduration, projectid=None, projectname=None,
-                        clientname=None, year=None, month=None, day=None, hour=None):
+    def createTimeEntry(self, hourduration, description=None, projectid=None, projectname=None,
+                        taskid=None, clientname=None, year=None, month=None, day=None, hour=None):
         """
         Creating a custom time entry, minimum must is hour duration and project param
         :param hourduration:
+        :param description: Sets a descripton for the newly created time entry
         :param projectid: Not required if projectname given
         :param projectname: Not required if projectid was given
+        :param taskid: Adds a task to the time entry (Requirement: Toggl Starter or higher)
         :param clientname: Can speed up project query process
         :param year: Taken from now() if not provided
         :param month: Taken from now() if not provided
@@ -155,6 +172,13 @@ class Toggl():
                 print('Too many missing parameters for query')
                 exit(1)
 
+        if description:
+            data['time_entry']['description'] = description
+
+        if taskid:
+            data['time_entry']['tid'] = taskid
+
+
         year = datetime.now().year if not year else year
         month = datetime.now().month if not month else month
         day = datetime.now().day if not day else day
@@ -169,6 +193,19 @@ class Toggl():
         response = self.postRequest(Endpoints.TIME_ENTRIES, parameters=data)
         return self.decodeJSON(response)
 
+    def putTimeEntry(self, parameters):
+        if not 'id' in parameters:
+            raise Exception("An id must be provided in order to put a time entry")
+        id = parameters['id']
+        if type(id) is not int:
+            raise Exception("Invalid id %s provided " % ( id ) )
+        endpoint = Endpoints.TIME_ENTRIES  + "/" + str(id) # encode all of our data for a put request & modify the URL
+        data = json.JSONEncoder().encode({'time_entry': parameters})
+        request = urllib2.Request(endpoint, data=data, headers=self.headers)
+        request.get_method = lambda:"PUT"
+
+        return json.loads(urllib2.urlopen(request).read())
+
     #-----------------------------------
     # Methods for getting workspace data
     #-----------------------------------
@@ -179,7 +216,7 @@ class Toggl():
     def getWorkspace(self, name=None, id=None):
         '''return the first workspace that matches a given name or id'''
         workspaces = self.getWorkspaces() # get all workspaces
-        
+
         # if they give us nothing let them know we're not returning anything
         if name == None and id == None:
             print("Error in getWorkspace(), please enter either a name or an id as a filter")
@@ -195,7 +232,7 @@ class Toggl():
                 if workspace['id'] == int(id):
                     return workspace # if we find it return it
             return None # if we get to here and haven't found it return None
-    
+
     #--------------------------------
     # Methods for getting client data
     #--------------------------------
@@ -206,7 +243,7 @@ class Toggl():
     def getClient(self, name=None, id=None):
         '''return the first workspace that matches a given name or id'''
         clients = self.getClients() # get all clients
-        
+
         # if they give us nothing let them know we're not returning anything
         if name == None and id == None:
             print("Error in getClient(), please enter either a name or an id as a filter")
@@ -281,6 +318,14 @@ class Toggl():
         '''return all projects that are visable to a user'''
         return self.request(Endpoints.PROJECTS + '/{0}'.format(pid))
 
+    def getProjectTasks(self, pid, archived=False):
+        """
+        return all tasks of a given project
+        :param pid: Project ID
+        :param archived: choose wether to fetch archived tasks or not
+        """
+        return self.request(Endpoints.PROJECTS + '/{0}'.format(pid) + '/tasks')
+
     #---------------------------------
     # Methods for getting reports data
     #---------------------------------
@@ -310,6 +355,18 @@ class Toggl():
         with open(filename, "wb") as pdf:
             pdf.write(filedata)
 
+    def getDetailedReportCSV(self, data, filename=None):
+        '''save a detailed report as a pdf'''
+        # get the raw pdf file data
+        filedata = self.requestRaw(Endpoints.REPORT_DETAILED + ".csv", parameters=data)
+
+        if filename:
+            # write the data to a file
+            with open(filename, "wb") as pdf:
+                pdf.write(filedata)
+        else:
+            return filedata
+
     def getSummaryReport(self, data):
         '''return a summary report for a user'''
         return self.request(Endpoints.REPORT_SUMMARY, parameters=data)
@@ -322,4 +379,3 @@ class Toggl():
         # write the data to a file
         with open(filename, "wb") as pdf:
             pdf.write(filedata)
-
